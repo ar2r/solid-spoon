@@ -7,6 +7,17 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+func getUserName(firstName, userName string) string {
+	if firstName != "" {
+		return firstName
+	}
+	return userName
+}
+
+func formatGreeting(userName string) string {
+	return "Привет, " + userName + "! Рад тебя видеть! 👋"
+}
+
 func main() {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
@@ -31,12 +42,8 @@ func main() {
 		}
 
 		if update.Message.IsCommand() && update.Message.Command() == "start" {
-			userName := update.Message.From.FirstName
-			if userName == "" {
-				userName = update.Message.From.UserName
-			}
-
-			greeting := "Привет, " + userName + "! Рад тебя видеть! 👋"
+			userName := getUserName(update.Message.From.FirstName, update.Message.From.UserName)
+			greeting := formatGreeting(userName)
 
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, greeting)
 			if _, err := bot.Send(msg); err != nil {
