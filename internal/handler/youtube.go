@@ -41,18 +41,23 @@ func (h *YouTubeHandler) Handle(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	videoID := extractYouTubeID(update.Message.Text)
 	chatID := update.Message.Chat.ID
 
+	log.Printf("[YOUTUBE] Processing video ID: %s for chat: %d", videoID, chatID)
+
 	// Показываем действие "печатает"
 	actionCfg := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
 	bot.Send(actionCfg)
 
 	// Получаем доступные форматы
+	log.Printf("[YOUTUBE] Fetching available formats for: %s", videoID)
 	formats, err := h.downloader.GetAvailableFormats(videoID)
 	if err != nil {
-		log.Printf("Failed to get formats: %v", err)
+		log.Printf("[YOUTUBE] Failed to get formats: %v", err)
 		errMsg := tgbotapi.NewMessage(chatID, "❌ Ошибка: "+err.Error())
 		bot.Send(errMsg)
 		return
 	}
+
+	log.Printf("[YOUTUBE] Found %d formats for: %s", len(formats), videoID)
 
 	// Создаём кнопки выбора качества
 	var buttons [][]tgbotapi.InlineKeyboardButton
@@ -60,13 +65,16 @@ func (h *YouTubeHandler) Handle(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		callbackData := fmt.Sprintf("yt:%s:%s", videoID, f.Quality)
 		btn := tgbotapi.NewInlineKeyboardButtonData(f.Description, callbackData)
 		buttons = append(buttons, tgbotapi.NewInlineKeyboardRow(btn))
+		log.Printf("[YOUTUBE] Added quality option: %s", f.Description)
 	}
 
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(buttons...)
 	msg := tgbotapi.NewMessage(chatID, "🎬 Выберите качество видео:")
 	msg.ReplyMarkup = keyboard
 
-	bot.Send(msg)
+	if _, err := bot.Send(msg); err != nil {
+		log.Printf("[YOUTUBE] Failed to send quality selection: %v", err)
+	}
 }
 
 func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
@@ -77,10 +85,13 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 	// Парсим данные: yt:videoID:quality
 	parts := strings.Split(callback.Data, ":")
 	if len(parts) != 3 {
+		log.Printf("[YOUTUBE] Invalid callback data: %s", callback.Data)
 		return
 	}
 	videoID := parts[1]
 	quality := downloader.Quality(parts[2])
+
+	log.Printf("[YOUTUBE] Callback: downloading %s in %s quality", videoID, quality)
 
 	// Отвечаем на callback
 	callbackCfg := tgbotapi.NewCallback(callback.ID, "Скачиваю "+string(quality)+"...")
@@ -95,14 +106,23 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 	bot.Send(actionCfg)
 
 	// Скачиваем видео
+	log.Printf("[YOUTUBE] Starting download: %s (%s)", videoID, quality)
 	filePath, err := h.downloader.DownloadWithQuality(videoID, quality)
 	if err != nil {
-		log.Printf("Failed to download video: %v", err)
+		log.Printf("[YOUTUBE] Download failed: %v", err)
 		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Ошибка: "+err.Error())
 		bot.Send(editMsg)
 		return
 	}
-	defer os.Remove(filePath)
+	defer func() {
+		if err := os.Remove(filePath); err != nil {
+			log.Printf("[YOUTUBE] Failed to remove temp file %s: %v", filePath, err)
+		} else {
+			log.Printf("[YOUTUBE] Temp file removed: %s", filePath)
+		}
+	}()
+
+	log.Printf("[YOUTUBE] Download complete: %s, sending to chat", filePath)
 
 	// Обновляем действие перед отправкой
 	bot.Send(actionCfg)
@@ -111,11 +131,13 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 	videoFile := tgbotapi.FilePath(filePath)
 	videoMsg := tgbotapi.NewVideo(chatID, videoFile)
 	if _, err := bot.Send(videoMsg); err != nil {
-		log.Printf("Failed to send video: %v", err)
+		log.Printf("[YOUTUBE] Failed to send video: %v", err)
 		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Не удалось отправить видео: "+err.Error())
 		bot.Send(editMsg)
 		return
 	}
+
+	log.Printf("[YOUTUBE] Video sent successfully: %s", videoID)
 
 	// Удаляем сообщение с кнопками
 	deleteMsg := tgbotapi.NewDeleteMessage(chatID, messageID)

@@ -42,9 +42,16 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 		return nil, fmt.Errorf("failed to get video info: %w", err)
 	}
 
+	// Сначала пробуем форматы с аудио
 	formats := video.Formats.WithAudioChannels()
+
+	// Если нет форматов с аудио, берём все видео форматы
 	if len(formats) == 0 {
-		return nil, fmt.Errorf("no formats with audio found")
+		formats = video.Formats
+	}
+
+	if len(formats) == 0 {
+		return nil, fmt.Errorf("no formats found")
 	}
 
 	qualityMap := make(map[string]VideoFormat)
@@ -59,13 +66,41 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 		}
 
 		qualityNum := parseQualityNum(quality)
-		if existing, ok := qualityMap[quality]; !ok || f.ContentLength < existing.Size {
-			qualityMap[quality] = VideoFormat{
-				Quality:     Quality(quality),
-				QualityNum:  qualityNum,
-				Size:        f.ContentLength,
-				Description: fmt.Sprintf("%s (~%dMB)", quality, f.ContentLength/(1024*1024)),
+
+		// Формируем описание размера
+		var sizeDesc string
+		if f.ContentLength > 0 {
+			sizeMB := f.ContentLength / (1024 * 1024)
+			if sizeMB > 0 {
+				sizeDesc = fmt.Sprintf(" (~%dMB)", sizeMB)
+			} else {
+				sizeKB := f.ContentLength / 1024
+				sizeDesc = fmt.Sprintf(" (~%dKB)", sizeKB)
 			}
+		}
+
+		// Проверяем наличие аудио
+		hasAudio := f.AudioChannels > 0
+		audioDesc := ""
+		if !hasAudio {
+			audioDesc = " 🔇"
+		}
+
+		description := fmt.Sprintf("%s%s%s", quality, sizeDesc, audioDesc)
+
+		// Предпочитаем форматы с аудио
+		if existing, ok := qualityMap[quality]; ok {
+			existingHasAudio := !strings.Contains(existing.Description, "🔇")
+			if existingHasAudio && !hasAudio {
+				continue // Пропускаем формат без аудио, если есть с аудио
+			}
+		}
+
+		qualityMap[quality] = VideoFormat{
+			Quality:     Quality(quality),
+			QualityNum:  qualityNum,
+			Size:        f.ContentLength,
+			Description: description,
 		}
 	}
 
