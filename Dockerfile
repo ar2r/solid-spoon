@@ -7,7 +7,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o bot .
+RUN CGO_ENABLED=0 GOOS=linux go build -o bot ./cmd/bot
 
 FROM alpine:latest
 
