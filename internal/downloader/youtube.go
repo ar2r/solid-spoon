@@ -3,9 +3,11 @@ package downloader
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kkdai/youtube/v2"
 )
@@ -33,8 +35,20 @@ type YouTubeDownloader struct {
 }
 
 func NewYouTubeDownloader() *YouTubeDownloader {
+	// Создаём HTTP-клиент с увеличенными таймаутами для больших файлов
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   30 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+		Timeout: 30 * time.Minute, // 30 минут на скачивание всего файла
+	}
+
 	return &YouTubeDownloader{
-		client: youtube.Client{},
+		client: youtube.Client{
+			HTTPClient: httpClient,
+		},
 	}
 }
 
