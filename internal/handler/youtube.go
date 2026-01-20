@@ -126,14 +126,32 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 	log.Printf("[YOUTUBE] Video metadata - Title: %s, Size: %dx%d, Duration: %ds",
 		videoInfo.Title, videoInfo.Width, videoInfo.Height, videoInfo.Duration)
 
-	// Обновляем действие перед отправкой
-	bot.Send(actionCfg)
+	// Проверяем размер скачанного файла
+	fileInfo, err := os.Stat(videoInfo.FilePath)
+	if err != nil {
+		log.Printf("[YOUTUBE] Failed to get file info: %v", err)
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Ошибка при проверке файла")
+		bot.Send(editMsg)
+		return
+	}
 
-	// Отправляем видео с метаданными
+	const maxTelegramSize = 50 * 1024 * 1024 // 50 МБ
+	if fileInfo.Size() > maxTelegramSize {
+		sizeMB := fileInfo.Size() / (1024 * 1024)
+		log.Printf("[YOUTUBE] File too large: %d MB (max 50 MB)", sizeMB)
+		editMsg := tgbotapi.NewEditMessageText(chatID, messageID,
+			fmt.Sprintf("❌ Видео слишком большое (%d МБ). Telegram поддерживает файлы до 50 МБ.\n\nПопробуйте выбрать качество пониже.", sizeMB))
+		bot.Send(editMsg)
+		return
+	}
+
+	// Обновляем действие перед отправкой
+	uploadAction := tgbotapi.NewChatAction(chatID, tgbotapi.ChatUploadDocument)
+	bot.Send(uploadAction)
+
+	// Отправляем видео как документ (файл)
 	videoFile := tgbotapi.FilePath(videoInfo.FilePath)
-	videoMsg := tgbotapi.NewVideo(chatID, videoFile)
-	videoMsg.Duration = videoInfo.Duration
-	videoMsg.SupportsStreaming = true
+	docMsg := tgbotapi.NewDocument(chatID, videoFile)
 
 	// Формируем caption с заголовком и описанием
 	caption := videoInfo.Title
@@ -149,10 +167,10 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 	if len(caption) > 1024 {
 		caption = caption[:1021] + "..."
 	}
-	videoMsg.Caption = caption
+	docMsg.Caption = caption
 
-	if _, err := bot.Send(videoMsg); err != nil {
-		log.Printf("[YOUTUBE] Failed to send video: %v", err)
+	if _, err := bot.Send(docMsg); err != nil {
+		log.Printf("[YOUTUBE] Failed to send document: %v", err)
 		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Не удалось отправить видео: "+err.Error())
 		bot.Send(editMsg)
 		return

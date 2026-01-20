@@ -190,6 +190,13 @@ func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Qual
 		selectedFormat = &formats[0]
 	}
 
+	// Проверяем фактический размер выбранного формата
+	const maxTelegramSize = 50 * 1024 * 1024 // 50 МБ
+	if selectedFormat.ContentLength > maxTelegramSize {
+		sizeMB := selectedFormat.ContentLength / (1024 * 1024)
+		return nil, fmt.Errorf("видео слишком большое (%d МБ), максимум 50 МБ", sizeMB)
+	}
+
 	stream, _, err := d.client.GetStream(video, selectedFormat)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stream: %w", err)
