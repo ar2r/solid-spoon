@@ -107,7 +107,7 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 
 	// Скачиваем видео
 	log.Printf("[YOUTUBE] Starting download: %s (%s)", videoID, quality)
-	filePath, err := h.downloader.DownloadWithQuality(videoID, quality)
+	videoInfo, err := h.downloader.DownloadWithQualityInfo(videoID, quality)
 	if err != nil {
 		log.Printf("[YOUTUBE] Download failed: %v", err)
 		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Ошибка: "+err.Error())
@@ -115,21 +115,42 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 		return
 	}
 	defer func() {
-		if err := os.Remove(filePath); err != nil {
-			log.Printf("[YOUTUBE] Failed to remove temp file %s: %v", filePath, err)
+		if err := os.Remove(videoInfo.FilePath); err != nil {
+			log.Printf("[YOUTUBE] Failed to remove temp file %s: %v", videoInfo.FilePath, err)
 		} else {
-			log.Printf("[YOUTUBE] Temp file removed: %s", filePath)
+			log.Printf("[YOUTUBE] Temp file removed: %s", videoInfo.FilePath)
 		}
 	}()
 
-	log.Printf("[YOUTUBE] Download complete: %s, sending to chat", filePath)
+	log.Printf("[YOUTUBE] Download complete: %s, sending to chat", videoInfo.FilePath)
+	log.Printf("[YOUTUBE] Video metadata - Title: %s, Size: %dx%d, Duration: %ds",
+		videoInfo.Title, videoInfo.Width, videoInfo.Height, videoInfo.Duration)
 
 	// Обновляем действие перед отправкой
 	bot.Send(actionCfg)
 
-	// Отправляем видео
-	videoFile := tgbotapi.FilePath(filePath)
+	// Отправляем видео с метаданными
+	videoFile := tgbotapi.FilePath(videoInfo.FilePath)
 	videoMsg := tgbotapi.NewVideo(chatID, videoFile)
+	videoMsg.Duration = videoInfo.Duration
+	videoMsg.SupportsStreaming = true
+
+	// Формируем caption с заголовком и описанием
+	caption := videoInfo.Title
+	if videoInfo.Description != "" {
+		// Ограничиваем описание до 200 символов
+		desc := videoInfo.Description
+		if len(desc) > 200 {
+			desc = desc[:200] + "..."
+		}
+		caption += "\n\n" + desc
+	}
+	// Telegram caption limit is 1024 characters
+	if len(caption) > 1024 {
+		caption = caption[:1021] + "..."
+	}
+	videoMsg.Caption = caption
+
 	if _, err := bot.Send(videoMsg); err != nil {
 		log.Printf("[YOUTUBE] Failed to send video: %v", err)
 		editMsg := tgbotapi.NewEditMessageText(chatID, messageID, "❌ Не удалось отправить видео: "+err.Error())

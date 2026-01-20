@@ -24,6 +24,8 @@ type VideoFormat struct {
 	QualityNum  int
 	Size        int64
 	Description string
+	Width       int
+	Height      int
 }
 
 type YouTubeDownloader struct {
@@ -54,6 +56,8 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 		return nil, fmt.Errorf("no formats found")
 	}
 
+	const maxTelegramSize = 50 * 1024 * 1024 // 50 МБ лимит Telegram
+
 	qualityMap := make(map[string]VideoFormat)
 	for _, f := range formats {
 		if !strings.Contains(f.MimeType, "video/mp4") {
@@ -62,6 +66,11 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 
 		quality := f.QualityLabel
 		if quality == "" {
+			continue
+		}
+
+		// Пропускаем файлы больше 50 МБ
+		if f.ContentLength > maxTelegramSize {
 			continue
 		}
 
@@ -101,6 +110,8 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 			QualityNum:  qualityNum,
 			Size:        f.ContentLength,
 			Description: description,
+			Width:       f.Width,
+			Height:      f.Height,
 		}
 	}
 
@@ -120,15 +131,32 @@ func (d *YouTubeDownloader) Download(videoID string) (string, error) {
 	return d.DownloadWithQuality(videoID, "")
 }
 
+type VideoInfo struct {
+	FilePath    string
+	Width       int
+	Height      int
+	Duration    int
+	Title       string
+	Description string
+}
+
 func (d *YouTubeDownloader) DownloadWithQuality(videoID string, quality Quality) (string, error) {
+	info, err := d.DownloadWithQualityInfo(videoID, quality)
+	if err != nil {
+		return "", err
+	}
+	return info.FilePath, nil
+}
+
+func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Quality) (*VideoInfo, error) {
 	video, err := d.client.GetVideo(videoID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get video info: %w", err)
+		return nil, fmt.Errorf("failed to get video info: %w", err)
 	}
 
 	formats := video.Formats.WithAudioChannels()
 	if len(formats) == 0 {
-		return "", fmt.Errorf("no formats with audio found")
+		return nil, fmt.Errorf("no formats with audio found")
 	}
 
 	var selectedFormat *youtube.Format
@@ -164,23 +192,32 @@ func (d *YouTubeDownloader) DownloadWithQuality(videoID string, quality Quality)
 
 	stream, _, err := d.client.GetStream(video, selectedFormat)
 	if err != nil {
-		return "", fmt.Errorf("failed to get stream: %w", err)
+		return nil, fmt.Errorf("failed to get stream: %w", err)
 	}
 	defer stream.Close()
 
 	tmpFile, err := os.CreateTemp("", "yt-*.mp4")
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer tmpFile.Close()
 
 	_, err = io.Copy(tmpFile, stream)
 	if err != nil {
 		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("failed to download video: %w", err)
+		return nil, fmt.Errorf("failed to download video: %w", err)
 	}
 
-	return tmpFile.Name(), nil
+	duration := int(video.Duration.Seconds())
+
+	return &VideoInfo{
+		FilePath:    tmpFile.Name(),
+		Width:       selectedFormat.Width,
+		Height:      selectedFormat.Height,
+		Duration:    duration,
+		Title:       video.Title,
+		Description: video.Description,
+	}, nil
 }
 
 func parseQualityNum(quality string) int {

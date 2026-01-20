@@ -4,5 +4,6 @@ package downloader
 type Downloader interface {
 	Download(videoID string) (filePath string, err error)
 	DownloadWithQuality(videoID string, quality Quality) (filePath string, err error)
+	DownloadWithQualityInfo(videoID string, quality Quality) (*VideoInfo, error)
 	GetAvailableFormats(videoID string) ([]VideoFormat, error)
 }
