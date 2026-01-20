@@ -135,15 +135,17 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 		return
 	}
 
-	const maxTelegramSize = 50 * 1024 * 1024 // 50 МБ
-	if fileInfo.Size() > maxTelegramSize {
+	const maxTelegramDocSize = 2000 * 1024 * 1024 // 2 ГБ для документов
+	if fileInfo.Size() > maxTelegramDocSize {
 		sizeMB := fileInfo.Size() / (1024 * 1024)
-		log.Printf("[YOUTUBE] File too large: %d MB (max 50 MB)", sizeMB)
+		log.Printf("[YOUTUBE] File too large: %d MB (max 2000 MB)", sizeMB)
 		editMsg := tgbotapi.NewEditMessageText(chatID, messageID,
-			fmt.Sprintf("❌ Видео слишком большое (%d МБ). Telegram поддерживает файлы до 50 МБ.\n\nПопробуйте выбрать качество пониже.", sizeMB))
+			fmt.Sprintf("❌ Видео слишком большое (%.1f ГБ). Telegram поддерживает файлы до 2 ГБ.\n\nПопробуйте выбрать качество пониже.", float64(sizeMB)/1024))
 		bot.Send(editMsg)
 		return
 	}
+
+	log.Printf("[YOUTUBE] File size: %.2f MB", float64(fileInfo.Size())/(1024*1024))
 
 	// Обновляем действие перед отправкой
 	uploadAction := tgbotapi.NewChatAction(chatID, tgbotapi.ChatUploadDocument)

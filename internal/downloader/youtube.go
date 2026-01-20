@@ -56,7 +56,7 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 		return nil, fmt.Errorf("no formats found")
 	}
 
-	const maxTelegramSize = 50 * 1024 * 1024 // 50 МБ лимит Telegram
+	const maxTelegramSize = 2000 * 1024 * 1024 // 2 ГБ лимит для документов Telegram
 
 	qualityMap := make(map[string]VideoFormat)
 	for _, f := range formats {
@@ -69,7 +69,7 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 			continue
 		}
 
-		// Пропускаем файлы больше 50 МБ
+		// Пропускаем файлы больше 2 ГБ
 		if f.ContentLength > maxTelegramSize {
 			continue
 		}
@@ -191,10 +191,10 @@ func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Qual
 	}
 
 	// Проверяем фактический размер выбранного формата
-	const maxTelegramSize = 50 * 1024 * 1024 // 50 МБ
+	const maxTelegramSize = 2000 * 1024 * 1024 // 2 ГБ для документов
 	if selectedFormat.ContentLength > maxTelegramSize {
-		sizeMB := selectedFormat.ContentLength / (1024 * 1024)
-		return nil, fmt.Errorf("видео слишком большое (%d МБ), максимум 50 МБ", sizeMB)
+		sizeGB := float64(selectedFormat.ContentLength) / (1024 * 1024 * 1024)
+		return nil, fmt.Errorf("видео слишком большое (%.1f ГБ), максимум 2 ГБ", sizeGB)
 	}
 
 	stream, _, err := d.client.GetStream(video, selectedFormat)
