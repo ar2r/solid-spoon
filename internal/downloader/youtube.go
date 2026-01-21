@@ -38,11 +38,11 @@ func NewYouTubeDownloader() *YouTubeDownloader {
 	// Создаём HTTP-клиент с увеличенными таймаутами для больших файлов
 	httpClient := &http.Client{
 		Transport: &http.Transport{
-			TLSHandshakeTimeout:   30 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   2 * time.Minute, // 2 минуты на TLS handshake
+			ResponseHeaderTimeout: 2 * time.Minute, // 2 минуты на получение заголовков
+			IdleConnTimeout:       5 * time.Minute, // 5 минут на простой соединения
 		},
-		Timeout: 30 * time.Minute, // 30 минут на скачивание всего файла
+		Timeout: 60 * time.Minute, // 60 минут на скачивание всего файла (до 2 ГБ)
 	}
 
 	return &YouTubeDownloader{
