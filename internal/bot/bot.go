@@ -1,7 +1,11 @@
 package bot
 
 import (
+	"fmt"
 	"log"
+	"os"
+	"strconv"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -33,6 +37,46 @@ func New(token string) (*Bot, error) {
 func (b *Bot) RegisterHandler(h Handler) {
 	b.handlers = append(b.handlers, h)
 	log.Printf("[BOT] Registered handler: %T", h)
+}
+
+func (b *Bot) SendStartupNotification() {
+	adminChatID := os.Getenv("ADMIN_CHAT_ID")
+	if adminChatID == "" {
+		log.Printf("[BOT] ADMIN_CHAT_ID not set, skipping startup notification")
+		return
+	}
+
+	chatID, err := strconv.ParseInt(adminChatID, 10, 64)
+	if err != nil {
+		log.Printf("[BOT] Invalid ADMIN_CHAT_ID: %v", err)
+		return
+	}
+
+	hostname, _ := os.Hostname()
+	version := os.Getenv("APP_VERSION")
+	if version == "" {
+		version = "unknown"
+	}
+
+	message := fmt.Sprintf(
+		"🚀 <b>Бот запущен</b>\n\n"+
+			"📅 Время: %s\n"+
+			"🏷 Версия: <code>%s</code>\n"+
+			"🖥 Хост: <code>%s</code>\n"+
+			"✅ Готов к работе!",
+		time.Now().Format("2006-01-02 15:04:05"),
+		version,
+		hostname,
+	)
+
+	msg := tgbotapi.NewMessage(chatID, message)
+	msg.ParseMode = "HTML"
+
+	if _, err := b.api.Send(msg); err != nil {
+		log.Printf("[BOT] Failed to send startup notification: %v", err)
+	} else {
+		log.Printf("[BOT] Startup notification sent to chat %d", chatID)
+	}
 }
 
 func (b *Bot) Run() {

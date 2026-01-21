@@ -24,6 +24,9 @@ func main() {
 	b.RegisterHandler(handler.NewStartHandler())
 	b.RegisterHandler(handler.NewYouTubeHandler(downloader.NewYouTubeDownloader()))
 
+	// Отправляем уведомление о запуске
+	b.SendStartupNotification()
+
 	// Запускаем бота
 	b.Run()
 }

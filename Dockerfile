@@ -7,7 +7,10 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o bot ./cmd/bot
+# Build arg для версии
+ARG APP_VERSION=unknown
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-X main.Version=${APP_VERSION}" -o bot ./cmd/bot
 
 FROM alpine:latest
 
@@ -16,5 +19,9 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /app
 
 COPY --from=builder /app/bot .
+
+# Версия приложения как переменная окружения
+ARG APP_VERSION=unknown
+ENV APP_VERSION=${APP_VERSION}
 
 CMD ["./bot"]

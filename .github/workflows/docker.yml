@@ -68,6 +68,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}-${{ github.sha }}
 
       - name: Deploy via SSH
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -84,4 +86,6 @@ jobs:
               --name solid-spoon \
               --restart always \
               -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              -e ADMIN_CHAT_ID="${{ secrets.ADMIN_CHAT_ID }}" \
+              -e APP_VERSION="${{ github.ref_name }}-${{ github.sha }}" \
               ghcr.io/ar2r/solid-spoon:main
