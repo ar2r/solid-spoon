@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-X main.Version=${APP_VERSION}" 
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates ffmpeg
+RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 

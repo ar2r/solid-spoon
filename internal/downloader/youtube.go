@@ -3,10 +3,8 @@ package downloader
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -154,7 +152,6 @@ type VideoInfo struct {
 	Duration    int
 	Title       string
 	Description string
-	Compressed  bool // Был ли файл сжат
 }
 
 func (d *YouTubeDownloader) DownloadWithQuality(videoID string, quality Quality) (string, error) {
