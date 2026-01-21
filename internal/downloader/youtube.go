@@ -3,8 +3,10 @@ package downloader
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -70,7 +72,7 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 		return nil, fmt.Errorf("no formats found")
 	}
 
-	const maxTelegramSize = 2000 * 1024 * 1024 // 2 ГБ лимит для документов Telegram
+	const maxTelegramBotAPI = 50 * 1024 * 1024 // 50 МБ - реальный лимит Bot API
 
 	qualityMap := make(map[string]VideoFormat)
 	for _, f := range formats {
@@ -83,8 +85,8 @@ func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, 
 			continue
 		}
 
-		// Пропускаем файлы больше 2 ГБ
-		if f.ContentLength > maxTelegramSize {
+		// Пропускаем файлы больше 50 МБ (реальный лимит Bot API)
+		if f.ContentLength > maxTelegramBotAPI {
 			continue
 		}
 
@@ -152,6 +154,7 @@ type VideoInfo struct {
 	Duration    int
 	Title       string
 	Description string
+	Compressed  bool // Был ли файл сжат
 }
 
 func (d *YouTubeDownloader) DownloadWithQuality(videoID string, quality Quality) (string, error) {
@@ -205,10 +208,10 @@ func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Qual
 	}
 
 	// Проверяем фактический размер выбранного формата
-	const maxTelegramSize = 2000 * 1024 * 1024 // 2 ГБ для документов
-	if selectedFormat.ContentLength > maxTelegramSize {
-		sizeGB := float64(selectedFormat.ContentLength) / (1024 * 1024 * 1024)
-		return nil, fmt.Errorf("видео слишком большое (%.1f ГБ), максимум 2 ГБ", sizeGB)
+	const maxTelegramBotAPI = 50 * 1024 * 1024 // 50 МБ - реальный лимит Bot API
+	if selectedFormat.ContentLength > maxTelegramBotAPI {
+		sizeMB := float64(selectedFormat.ContentLength) / (1024 * 1024)
+		return nil, fmt.Errorf("видео слишком большое (%.1f МБ), максимум 50 МБ", sizeMB)
 	}
 
 	stream, _, err := d.client.GetStream(video, selectedFormat)
@@ -231,14 +234,135 @@ func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Qual
 
 	duration := int(video.Duration.Seconds())
 
-	return &VideoInfo{
+	videoInfo := &VideoInfo{
 		FilePath:    tmpFile.Name(),
 		Width:       selectedFormat.Width,
 		Height:      selectedFormat.Height,
 		Duration:    duration,
 		Title:       video.Title,
 		Description: video.Description,
-	}, nil
+		Compressed:  false,
+	}
+
+	// Проверяем размер файла и сжимаем если нужно
+	fileInfo, err := os.Stat(tmpFile.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	const maxSize = 50 * 1024 * 1024 // 50 МБ
+	if fileInfo.Size() > maxSize {
+		log.Printf("[YOUTUBE] File size %.2f MB exceeds limit, compressing...", float64(fileInfo.Size())/(1024*1024))
+		compressedPath, err := compressVideo(tmpFile.Name(), maxSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compress video: %w", err)
+		}
+		// Удаляем оригинальный файл
+		os.Remove(tmpFile.Name())
+		videoInfo.FilePath = compressedPath
+		videoInfo.Compressed = true
+
+		// Логируем результат сжатия
+		compressedInfo, _ := os.Stat(compressedPath)
+		log.Printf("[YOUTUBE] Compression complete: %.2f MB -> %.2f MB",
+			float64(fileInfo.Size())/(1024*1024),
+			float64(compressedInfo.Size())/(1024*1024))
+	}
+
+	return videoInfo, nil
+}
+
+// compressVideo сжимает видео до указанного размера с помощью ffmpeg
+func compressVideo(inputPath string, targetSize int64) (string, error) {
+	// Создаём временный файл для сжатого видео
+	outputFile, err := os.CreateTemp("", "yt-compressed-*.mp4")
+	if err != nil {
+		return "", err
+	}
+	outputPath := outputFile.Name()
+	outputFile.Close()
+
+	// Получаем длительность видео
+	durationCmd := exec.Command("ffprobe", "-v", "error", "-show_entries",
+		"format=duration", "-of", "default=noprint_wrappers=1:nokey=1", inputPath)
+	durationOut, err := durationCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get video duration: %w", err)
+	}
+
+	var durationSec float64
+	fmt.Sscanf(string(durationOut), "%f", &durationSec)
+	if durationSec == 0 {
+		durationSec = 1
+	}
+
+	// Вычисляем целевой bitrate (оставляем запас 10%)
+	targetSizeKb := float64(targetSize) * 0.9 / 1024
+	targetBitrate := int((targetSizeKb * 8) / durationSec) // kbps
+
+	// Минимальный bitrate для приемлемого качества
+	if targetBitrate < 200 {
+		targetBitrate = 200
+	}
+
+	// Сжимаем видео с помощью ffmpeg
+	// -preset fast - быстрое кодирование
+	// -b:v - битрейт видео
+	// -maxrate и -bufsize для контроля размера
+	cmd := exec.Command("ffmpeg",
+		"-i", inputPath,
+		"-c:v", "libx264",
+		"-preset", "fast",
+		"-b:v", fmt.Sprintf("%dk", targetBitrate),
+		"-maxrate", fmt.Sprintf("%dk", targetBitrate),
+		"-bufsize", fmt.Sprintf("%dk", targetBitrate*2),
+		"-c:a", "aac",
+		"-b:a", "128k",
+		"-movflags", "+faststart",
+		"-y",
+		outputPath,
+	)
+
+	if err := cmd.Run(); err != nil {
+		os.Remove(outputPath)
+		return "", fmt.Errorf("ffmpeg compression failed: %w", err)
+	}
+
+	// Проверяем размер результата
+	compressedInfo, err := os.Stat(outputPath)
+	if err != nil {
+		os.Remove(outputPath)
+		return "", err
+	}
+
+	// Если всё ещё больше целевого размера, пробуем более агрессивное сжатие
+	if compressedInfo.Size() > targetSize {
+		newBitrate := int(float64(targetBitrate) * 0.7)
+		if newBitrate < 150 {
+			newBitrate = 150
+		}
+
+		cmd = exec.Command("ffmpeg",
+			"-i", inputPath,
+			"-c:v", "libx264",
+			"-preset", "faster",
+			"-b:v", fmt.Sprintf("%dk", newBitrate),
+			"-maxrate", fmt.Sprintf("%dk", newBitrate),
+			"-bufsize", fmt.Sprintf("%dk", newBitrate*2),
+			"-c:a", "aac",
+			"-b:a", "96k",
+			"-movflags", "+faststart",
+			"-y",
+			outputPath,
+		)
+
+		if err := cmd.Run(); err != nil {
+			os.Remove(outputPath)
+			return "", fmt.Errorf("ffmpeg second pass failed: %w", err)
+		}
+	}
+
+	return outputPath, nil
 }
 
 func parseQualityNum(quality string) int {
