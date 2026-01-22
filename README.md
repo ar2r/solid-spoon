@@ -39,13 +39,17 @@ docker run -e TELEGRAM_BOT_TOKEN="токен" solid-spoon
 При push в `main`:
 1. Запускаются тесты
 2. Собирается Docker-образ → `ghcr.io/ar2r/solid-spoon:main`
-3. Вызывается Portainer webhook → автоматический редеплой контейнера
+3. Деплой на сервер через SSH
 
 ### GitHub Secrets
 
 | Secret | Описание |
 |--------|----------|
-| `PORTAINER_WEBHOOK_URL` | Webhook URL из Portainer для автодеплоя |
+| `SERVER_HOST` | IP или домен сервера |
+| `SERVER_USER` | SSH пользователь |
+| `SERVER_SSH_KEY` | Приватный SSH ключ |
+| `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather |
+| `ADMIN_CHAT_ID` | Chat ID для уведомлений |
 
 ### Environment Variables (Portainer)
 
