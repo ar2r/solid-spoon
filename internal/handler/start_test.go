@@ -7,7 +7,7 @@ import (
 )
 
 func TestStartHandler_CanHandle(t *testing.T) {
-	handler := NewStartHandler()
+	handler := NewStartHandler(nil, nil)
 
 	tests := []struct {
 		name     string

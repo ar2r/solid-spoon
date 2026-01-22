@@ -6,18 +6,32 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/artur/solid-spoon/internal/database/models"
+	"github.com/artur/solid-spoon/internal/database/repository"
 	"github.com/artur/solid-spoon/internal/downloader"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type YouTubeHandler struct {
 	downloader downloader.Downloader
+	userRepo   *repository.UserRepository
+	statsRepo  *repository.StatsRepository
+	videoRepo  *repository.VideoRepository
 }
 
-func NewYouTubeHandler(dl downloader.Downloader) *YouTubeHandler {
+func NewYouTubeHandler(
+	dl downloader.Downloader,
+	userRepo *repository.UserRepository,
+	statsRepo *repository.StatsRepository,
+	videoRepo *repository.VideoRepository,
+) *YouTubeHandler {
 	return &YouTubeHandler{
 		downloader: dl,
+		userRepo:   userRepo,
+		statsRepo:  statsRepo,
+		videoRepo:  videoRepo,
 	}
 }
 
@@ -42,6 +56,17 @@ func (h *YouTubeHandler) Handle(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	chatID := update.Message.Chat.ID
 
 	log.Printf("[YOUTUBE] Processing video ID: %s for chat: %d", videoID, chatID)
+
+	// Сохраняем пользователя в БД
+	user, err := h.userRepo.UpsertFromTelegram(update.Message.From)
+	if err != nil {
+		log.Printf("[YOUTUBE] Failed to upsert user: %v", err)
+	} else {
+		// Записываем статистику команды
+		if err := h.statsRepo.RecordCommand(user.ID, "youtube"); err != nil {
+			log.Printf("[YOUTUBE] Failed to record command: %v", err)
+		}
+	}
 
 	// Показываем действие "печатает"
 	actionCfg := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
@@ -197,6 +222,23 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 	}
 
 	log.Printf("[YOUTUBE] Video sent successfully: %s", videoID)
+
+	// Записываем скачивание в БД
+	if user, err := h.userRepo.GetByTelegramID(callback.From.ID); err == nil && user != nil {
+		download := &models.VideoDownload{
+			UserID:        user.ID,
+			VideoID:       videoID,
+			VideoURL:      fmt.Sprintf("https://youtube.com/watch?v=%s", videoID),
+			VideoTitle:    videoInfo.Title,
+			Quality:       string(quality),
+			Compressed:    videoInfo.Compressed,
+			FileSizeBytes: fileInfo.Size(),
+			ExecutedAt:    time.Now(),
+		}
+		if err := h.videoRepo.RecordDownload(download); err != nil {
+			log.Printf("[YOUTUBE] Failed to record download: %v", err)
+		}
+	}
 
 	// Удаляем сообщение с кнопками
 	deleteMsg := tgbotapi.NewDeleteMessage(chatID, messageID)

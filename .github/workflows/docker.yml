@@ -79,13 +79,18 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            # Создаём директорию для данных
+            mkdir -p ~/solid-spoon-data
+
             docker pull ghcr.io/ar2r/solid-spoon:main
             docker stop solid-spoon || true
             docker rm solid-spoon || true
             docker run -d \
               --name solid-spoon \
               --restart always \
+              -v ~/solid-spoon-data:/data \
               -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
               -e ADMIN_CHAT_ID="${{ secrets.ADMIN_CHAT_ID }}" \
               -e APP_VERSION="${{ github.ref_name }}-${{ github.sha }}" \
+              -e DB_PATH="/data/bot.db" \
               ghcr.io/ar2r/solid-spoon:main
