@@ -54,6 +54,7 @@ func (h *YouTubeHandler) Handle(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 
 	videoID := extractYouTubeID(update.Message.Text)
 	chatID := update.Message.Chat.ID
+	messageID := update.Message.MessageID
 
 	log.Printf("[YOUTUBE] Processing video ID: %s for chat: %d", videoID, chatID)
 
@@ -99,6 +100,12 @@ func (h *YouTubeHandler) Handle(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 
 	if _, err := bot.Send(msg); err != nil {
 		log.Printf("[YOUTUBE] Failed to send quality selection: %v", err)
+	}
+
+	// Удаляем сообщение пользователя с ссылкой
+	deleteMsg := tgbotapi.NewDeleteMessage(chatID, messageID)
+	if _, err := bot.Send(deleteMsg); err != nil {
+		log.Printf("[YOUTUBE] Failed to delete user message: %v", err)
 	}
 }
 
