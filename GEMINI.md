@@ -80,6 +80,11 @@
 *   **Error Handling:** Extensive logging of errors with context.
 *   **Database:** Uses `modernc.org/sqlite` (CGO-free SQLite). Ensure the `data` directory exists or is writable if persisting data.
 *   **Testing:** Run tests using `go test ./...`.
+*   **Deployment Workflow:** After making changes, ALWAYS:
+    1.  Run tests: `go test ./...`
+    2.  Commit changes.
+    3.  Push to repository.
+    (This triggers automatic deployment).
 
 ## Architecture Highlights
 *   **Handler Logic:** The `YouTubeHandler` (`internal/handler/youtube.go`) orchestrates the flow:
