@@ -1,15 +1,12 @@
 package downloader
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
-	"strings"
-	"time"
-
-	"github.com/kkdai/youtube/v2"
 )
 
 type Quality string
@@ -21,6 +18,9 @@ const (
 	QualityFull   Quality = "1080p"
 )
 
+// maxLocalAPIServer - максимальный размер файла для Local API Server (2 ГБ)
+const maxLocalAPIServer = 2000 * 1024 * 1024
+
 type VideoFormat struct {
 	Quality     Quality
 	QualityNum  int
@@ -30,103 +30,183 @@ type VideoFormat struct {
 	Height      int
 }
 
+type VideoInfo struct {
+	FilePath    string
+	Width       int
+	Height      int
+	Duration    int
+	Title       string
+	Description string
+	Compressed  bool
+}
+
+// ytdlpVideoInfo represents the JSON output from yt-dlp -j
+type ytdlpVideoInfo struct {
+	ID          string         `json:"id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Duration    float64        `json:"duration"`
+	Formats     []ytdlpFormat  `json:"formats"`
+}
+
+type ytdlpFormat struct {
+	FormatID   string  `json:"format_id"`
+	Ext        string  `json:"ext"`
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+	Filesize   int64   `json:"filesize"`
+	FilesizeApprox int64 `json:"filesize_approx"`
+	VCodec     string  `json:"vcodec"`
+	ACodec     string  `json:"acodec"`
+	FormatNote string  `json:"format_note"`
+}
+
 type YouTubeDownloader struct {
-	client youtube.Client
+	ytdlpPath string
+	maxSize   int64
 }
 
 func NewYouTubeDownloader() *YouTubeDownloader {
-	// Создаём HTTP-клиент с увеличенными таймаутами для больших файлов
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSHandshakeTimeout:   2 * time.Minute, // 2 минуты на TLS handshake
-			ResponseHeaderTimeout: 2 * time.Minute, // 2 минуты на получение заголовков
-			IdleConnTimeout:       5 * time.Minute, // 5 минут на простой соединения
-		},
-		Timeout: 60 * time.Minute, // 60 минут на скачивание всего файла (до 2 ГБ)
-	}
-
 	return &YouTubeDownloader{
-		client: youtube.Client{
-			HTTPClient: httpClient,
-		},
+		ytdlpPath: "yt-dlp",
+		maxSize:   maxLocalAPIServer,
 	}
 }
 
 func (d *YouTubeDownloader) GetAvailableFormats(videoID string) ([]VideoFormat, error) {
-	video, err := d.client.GetVideo(videoID)
+	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
+
+	cmd := exec.Command(d.ytdlpPath, "-j", url)
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get video info: %w", err)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("yt-dlp error: %s", string(exitErr.Stderr))
+		}
+		return nil, fmt.Errorf("failed to run yt-dlp: %w", err)
 	}
 
-	// Сначала пробуем форматы с аудио
-	formats := video.Formats.WithAudioChannels()
-
-	// Если нет форматов с аудио, берём все видео форматы
-	if len(formats) == 0 {
-		formats = video.Formats
+	var info ytdlpVideoInfo
+	if err := json.Unmarshal(output, &info); err != nil {
+		return nil, fmt.Errorf("failed to parse yt-dlp output: %w", err)
 	}
 
-	if len(formats) == 0 {
-		return nil, fmt.Errorf("no formats found")
-	}
-
-	const maxTelegramBotAPI = 50 * 1024 * 1024 // 50 МБ - реальный лимит Bot API
-
-	qualityMap := make(map[string]VideoFormat)
-	for _, f := range formats {
-		if !strings.Contains(f.MimeType, "video/mp4") {
+	qualityMap := make(map[int]VideoFormat)
+	for _, f := range info.Formats {
+		// Пропускаем не-MP4 форматы
+		if f.Ext != "mp4" {
 			continue
 		}
 
-		quality := f.QualityLabel
-		if quality == "" {
+		// Пропускаем форматы без видео
+		if f.VCodec == "none" || f.VCodec == "" {
 			continue
 		}
 
-		// Пропускаем файлы больше 50 МБ (реальный лимит Bot API)
-		if f.ContentLength > maxTelegramBotAPI {
+		// Пропускаем форматы без аудио (предпочитаем с аудио)
+		if f.ACodec == "none" || f.ACodec == "" {
 			continue
 		}
 
-		qualityNum := parseQualityNum(quality)
+		if f.Height == 0 {
+			continue
+		}
+
+		// Получаем размер файла
+		filesize := f.Filesize
+		if filesize == 0 {
+			filesize = f.FilesizeApprox
+		}
+
+		// Пропускаем файлы больше лимита
+		if filesize > d.maxSize {
+			continue
+		}
+
+		qualityLabel := fmt.Sprintf("%dp", f.Height)
 
 		// Формируем описание размера
 		var sizeDesc string
-		if f.ContentLength > 0 {
-			sizeMB := f.ContentLength / (1024 * 1024)
+		if filesize > 0 {
+			sizeMB := filesize / (1024 * 1024)
 			if sizeMB > 0 {
 				sizeDesc = fmt.Sprintf(" (~%dMB)", sizeMB)
 			} else {
-				sizeKB := f.ContentLength / 1024
+				sizeKB := filesize / 1024
 				sizeDesc = fmt.Sprintf(" (~%dKB)", sizeKB)
 			}
 		}
 
-		// Проверяем наличие аудио
-		hasAudio := f.AudioChannels > 0
-		audioDesc := ""
-		if !hasAudio {
-			audioDesc = " 🔇"
-		}
+		description := fmt.Sprintf("%s%s", qualityLabel, sizeDesc)
 
-		description := fmt.Sprintf("%s%s%s", quality, sizeDesc, audioDesc)
-
-		// Предпочитаем форматы с аудио
-		if existing, ok := qualityMap[quality]; ok {
-			existingHasAudio := !strings.Contains(existing.Description, "🔇")
-			if existingHasAudio && !hasAudio {
-				continue // Пропускаем формат без аудио, если есть с аудио
+		// Сохраняем только один формат для каждого качества (предпочитаем меньший размер)
+		if existing, ok := qualityMap[f.Height]; ok {
+			if filesize > 0 && filesize < existing.Size {
+				qualityMap[f.Height] = VideoFormat{
+					Quality:     Quality(qualityLabel),
+					QualityNum:  f.Height,
+					Size:        filesize,
+					Description: description,
+					Width:       f.Width,
+					Height:      f.Height,
+				}
+			}
+		} else {
+			qualityMap[f.Height] = VideoFormat{
+				Quality:     Quality(qualityLabel),
+				QualityNum:  f.Height,
+				Size:        filesize,
+				Description: description,
+				Width:       f.Width,
+				Height:      f.Height,
 			}
 		}
+	}
 
-		qualityMap[quality] = VideoFormat{
-			Quality:     Quality(quality),
-			QualityNum:  qualityNum,
-			Size:        f.ContentLength,
-			Description: description,
-			Width:       f.Width,
-			Height:      f.Height,
+	// Если нет форматов с аудио, попробуем форматы которые yt-dlp может объединить
+	if len(qualityMap) == 0 {
+		for _, f := range info.Formats {
+			if f.Ext != "mp4" && f.Ext != "webm" {
+				continue
+			}
+			if f.VCodec == "none" || f.VCodec == "" {
+				continue
+			}
+			if f.Height == 0 {
+				continue
+			}
+
+			filesize := f.Filesize
+			if filesize == 0 {
+				filesize = f.FilesizeApprox
+			}
+			if filesize > d.maxSize {
+				continue
+			}
+
+			qualityLabel := fmt.Sprintf("%dp", f.Height)
+			var sizeDesc string
+			if filesize > 0 {
+				sizeMB := filesize / (1024 * 1024)
+				if sizeMB > 0 {
+					sizeDesc = fmt.Sprintf(" (~%dMB)", sizeMB)
+				}
+			}
+
+			if _, ok := qualityMap[f.Height]; !ok {
+				qualityMap[f.Height] = VideoFormat{
+					Quality:     Quality(qualityLabel),
+					QualityNum:  f.Height,
+					Size:        filesize,
+					Description: fmt.Sprintf("%s%s", qualityLabel, sizeDesc),
+					Width:       f.Width,
+					Height:      f.Height,
+				}
+			}
 		}
+	}
+
+	if len(qualityMap) == 0 {
+		return nil, fmt.Errorf("no suitable formats found")
 	}
 
 	result := make([]VideoFormat, 0, len(qualityMap))
@@ -145,16 +225,6 @@ func (d *YouTubeDownloader) Download(videoID string) (string, error) {
 	return d.DownloadWithQuality(videoID, "")
 }
 
-type VideoInfo struct {
-	FilePath    string
-	Width       int
-	Height      int
-	Duration    int
-	Title       string
-	Description string
-	Compressed  bool
-}
-
 func (d *YouTubeDownloader) DownloadWithQuality(videoID string, quality Quality) (string, error) {
 	info, err := d.DownloadWithQualityInfo(videoID, quality)
 	if err != nil {
@@ -164,86 +234,88 @@ func (d *YouTubeDownloader) DownloadWithQuality(videoID string, quality Quality)
 }
 
 func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Quality) (*VideoInfo, error) {
-	video, err := d.client.GetVideo(videoID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get video info: %w", err)
+	url := fmt.Sprintf("https://www.youtube.com/watch?v=%s", videoID)
+
+	// Создаём временный файл
+	tmpDir := os.TempDir()
+	outputPath := filepath.Join(tmpDir, fmt.Sprintf("yt-%s.mp4", videoID))
+
+	// Формируем аргументы yt-dlp
+	// Используем только форматы с уже объединённым аудио (без ffmpeg)
+	args := []string{
+		"--no-playlist",
+		"-o", outputPath,
 	}
 
-	formats := video.Formats.WithAudioChannels()
-	if len(formats) == 0 {
-		return nil, fmt.Errorf("no formats with audio found")
-	}
-
-	var selectedFormat *youtube.Format
-	for i := range formats {
-		if !strings.Contains(formats[i].MimeType, "video/mp4") {
-			continue
+	// Добавляем фильтр по качеству - только форматы с видео И аудио (без merge)
+	if quality != "" {
+		height := parseQualityNum(string(quality))
+		if height > 0 {
+			// Выбираем лучший формат с указанным качеством, где есть и видео и аудио
+			formatSpec := fmt.Sprintf("best[height<=%d][ext=mp4][acodec!=none][vcodec!=none]/best[height<=%d][acodec!=none][vcodec!=none]/best[ext=mp4][acodec!=none][vcodec!=none]", height, height)
+			args = append(args, "-f", formatSpec)
 		}
-
-		if quality != "" && formats[i].QualityLabel == string(quality) {
-			selectedFormat = &formats[i]
-			break
-		}
-
-		if quality == "" {
-			if selectedFormat == nil || formats[i].ContentLength < selectedFormat.ContentLength {
-				selectedFormat = &formats[i]
-			}
-		}
+	} else {
+		// Без указания качества - берём наименьший размер с аудио и видео
+		args = append(args, "-f", "worst[ext=mp4][acodec!=none][vcodec!=none]/worst[acodec!=none][vcodec!=none]")
 	}
 
-	if selectedFormat == nil {
-		for i := range formats {
-			if strings.Contains(formats[i].MimeType, "video/mp4") {
-				selectedFormat = &formats[i]
-				break
-			}
-		}
-	}
+	// Добавляем вывод JSON для получения метаданных
+	args = append(args, "--print-json", url)
 
-	if selectedFormat == nil {
-		selectedFormat = &formats[0]
-	}
-
-	// Проверяем фактический размер выбранного формата
-	const maxTelegramBotAPI = 50 * 1024 * 1024 // 50 МБ - реальный лимит Bot API
-	if selectedFormat.ContentLength > maxTelegramBotAPI {
-		sizeMB := float64(selectedFormat.ContentLength) / (1024 * 1024)
-		return nil, fmt.Errorf("видео слишком большое (%.1f МБ), максимум 50 МБ", sizeMB)
-	}
-
-	stream, _, err := d.client.GetStream(video, selectedFormat)
+	cmd := exec.Command(d.ytdlpPath, args...)
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get stream: %w", err)
-	}
-	defer stream.Close()
-
-	tmpFile, err := os.CreateTemp("", "yt-*.mp4")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer tmpFile.Close()
-
-	_, err = io.Copy(tmpFile, stream)
-	if err != nil {
-		os.Remove(tmpFile.Name())
+		// Удаляем частично скачанный файл
+		os.Remove(outputPath)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("yt-dlp download error: %s", string(exitErr.Stderr))
+		}
 		return nil, fmt.Errorf("failed to download video: %w", err)
 	}
 
-	duration := int(video.Duration.Seconds())
-
-	videoInfo := &VideoInfo{
-		FilePath:    tmpFile.Name(),
-		Width:       selectedFormat.Width,
-		Height:      selectedFormat.Height,
-		Duration:    duration,
-		Title:       video.Title,
-		Description: video.Description,
-		Compressed:  false,
+	// Парсим JSON вывод для получения метаданных
+	var info ytdlpVideoInfo
+	if err := json.Unmarshal(output, &info); err != nil {
+		// Если не удалось распарсить, проверяем что файл скачался
+		if _, statErr := os.Stat(outputPath); statErr != nil {
+			return nil, fmt.Errorf("download failed: file not found")
+		}
 	}
 
-	return videoInfo, nil
+	// Проверяем размер файла
+	fileInfo, err := os.Stat(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat downloaded file: %w", err)
+	}
+
+	if fileInfo.Size() > d.maxSize {
+		os.Remove(outputPath)
+		sizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+		maxMB := float64(d.maxSize) / (1024 * 1024)
+		return nil, fmt.Errorf("видео слишком большое (%.1f МБ), максимум %.0f МБ", sizeMB, maxMB)
+	}
+
+	// Получаем размеры видео из формата (если доступны)
+	width, height := 0, 0
+	for _, f := range info.Formats {
+		if f.Width > width {
+			width = f.Width
+			height = f.Height
+		}
+	}
+
+	return &VideoInfo{
+		FilePath:    outputPath,
+		Width:       width,
+		Height:      height,
+		Duration:    int(info.Duration),
+		Title:       info.Title,
+		Description: info.Description,
+		Compressed:  false,
+	}, nil
 }
+
 func parseQualityNum(quality string) int {
 	var num int
 	fmt.Sscanf(quality, "%dp", &num)
