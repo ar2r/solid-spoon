@@ -21,7 +21,20 @@ type Bot struct {
 }
 
 func New(token string) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(token)
+	var api *tgbotapi.BotAPI
+	var err error
+
+	// Используем Local API Server если указан endpoint
+	apiEndpoint := os.Getenv("TELEGRAM_API_ENDPOINT")
+	if apiEndpoint != "" {
+		// Формат endpoint: http://telegram-bot-api:8081/bot%s/%s
+		api, err = tgbotapi.NewBotAPIWithAPIEndpoint(token, apiEndpoint)
+		log.Printf("[BOT] Using Local API Server: %s", apiEndpoint)
+	} else {
+		api, err = tgbotapi.NewBotAPI(token)
+		log.Printf("[BOT] Using standard Telegram API")
+	}
+
 	if err != nil {
 		return nil, err
 	}

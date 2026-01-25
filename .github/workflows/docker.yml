@@ -88,8 +88,10 @@ jobs:
             docker run -d \
               --name solid-spoon \
               --restart always \
+              --network bot-network \
               -v ~/solid-spoon-data:/data \
               -e TELEGRAM_BOT_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}" \
+              -e TELEGRAM_API_ENDPOINT="http://telegram-bot-api:8081/bot%s/%s" \
               -e ADMIN_CHAT_ID="${{ secrets.ADMIN_CHAT_ID }}" \
               -e APP_VERSION="${{ github.ref_name }}-${{ github.sha }}" \
               -e DB_PATH="/data/bot.db" \
