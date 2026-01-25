@@ -167,29 +167,8 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 		return
 	}
 
-	const maxTelegramBotAPI = 50 * 1024 * 1024 // 50 МБ - реальный лимит Bot API
-	const maxTelegramDocSize = 2000 * 1024 * 1024 // 2 ГБ - теоретический лимит (работает только с локальным API)
-
 	sizeMB := float64(fileInfo.Size()) / (1024 * 1024)
 	log.Printf("[YOUTUBE] File size: %.2f MB", sizeMB)
-
-	// Если файл больше 2 ГБ - отказываем
-	if fileInfo.Size() > maxTelegramDocSize {
-		log.Printf("[YOUTUBE] File too large: %.2f MB (max 2000 MB)", sizeMB)
-		editMsg := tgbotapi.NewEditMessageText(chatID, messageID,
-			fmt.Sprintf("❌ Видео слишком большое (%.1f ГБ). Максимум 2 ГБ.\n\nВыберите качество пониже.", sizeMB/1024))
-		bot.Send(editMsg)
-		return
-	}
-
-	// Если файл уже сжат в downloader, но всё равно больше 50 МБ - что-то пошло не так
-	if videoInfo.Compressed && fileInfo.Size() > maxTelegramBotAPI {
-		log.Printf("[YOUTUBE] Compressed file still too large: %.2f MB", sizeMB)
-		editMsg := tgbotapi.NewEditMessageText(chatID, messageID,
-			fmt.Sprintf("❌ Не удалось сжать видео до 50 МБ (получилось %.1f МБ).\n\nПопробуйте более низкое качество.", sizeMB))
-		bot.Send(editMsg)
-		return
-	}
 
 	// Обновляем действие перед отправкой
 	uploadAction := tgbotapi.NewChatAction(chatID, tgbotapi.ChatUploadDocument)
@@ -208,11 +187,6 @@ func (h *YouTubeHandler) handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Up
 			desc = desc[:200] + "..."
 		}
 		caption += "\n\n" + desc
-	}
-
-	// Добавляем информацию о сжатии
-	if videoInfo.Compressed {
-		caption += "\n\n⚙️ Видео сжато для отправки через Telegram"
 	}
 
 	// Telegram caption limit is 1024 characters
