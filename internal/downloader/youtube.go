@@ -3,10 +3,8 @@ package downloader
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -244,127 +242,8 @@ func (d *YouTubeDownloader) DownloadWithQualityInfo(videoID string, quality Qual
 		Compressed:  false,
 	}
 
-	// Проверяем размер файла и сжимаем если нужно
-	fileInfo, err := os.Stat(tmpFile.Name())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get file info: %w", err)
-	}
-
-	const maxSize = 50 * 1024 * 1024 // 50 МБ
-	if fileInfo.Size() > maxSize {
-		log.Printf("[YOUTUBE] File size %.2f MB exceeds limit, compressing...", float64(fileInfo.Size())/(1024*1024))
-		compressedPath, err := compressVideo(tmpFile.Name(), maxSize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to compress video: %w", err)
-		}
-		// Удаляем оригинальный файл
-		os.Remove(tmpFile.Name())
-		videoInfo.FilePath = compressedPath
-		videoInfo.Compressed = true
-
-		// Логируем результат сжатия
-		compressedInfo, _ := os.Stat(compressedPath)
-		log.Printf("[YOUTUBE] Compression complete: %.2f MB -> %.2f MB",
-			float64(fileInfo.Size())/(1024*1024),
-			float64(compressedInfo.Size())/(1024*1024))
-	}
-
 	return videoInfo, nil
 }
-
-// compressVideo сжимает видео до указанного размера с помощью ffmpeg
-func compressVideo(inputPath string, targetSize int64) (string, error) {
-	// Создаём временный файл для сжатого видео
-	outputFile, err := os.CreateTemp("", "yt-compressed-*.mp4")
-	if err != nil {
-		return "", err
-	}
-	outputPath := outputFile.Name()
-	outputFile.Close()
-
-	// Получаем длительность видео
-	durationCmd := exec.Command("ffprobe", "-v", "error", "-show_entries",
-		"format=duration", "-of", "default=noprint_wrappers=1:nokey=1", inputPath)
-	durationOut, err := durationCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get video duration: %w", err)
-	}
-
-	var durationSec float64
-	fmt.Sscanf(string(durationOut), "%f", &durationSec)
-	if durationSec == 0 {
-		durationSec = 1
-	}
-
-	// Вычисляем целевой bitrate (оставляем запас 10%)
-	targetSizeKb := float64(targetSize) * 0.9 / 1024
-	targetBitrate := int((targetSizeKb * 8) / durationSec) // kbps
-
-	// Минимальный bitrate для приемлемого качества
-	if targetBitrate < 200 {
-		targetBitrate = 200
-	}
-
-	// Сжимаем видео с помощью ffmpeg
-	// -preset fast - быстрое кодирование
-	// -b:v - битрейт видео
-	// -maxrate и -bufsize для контроля размера
-	cmd := exec.Command("ffmpeg",
-		"-i", inputPath,
-		"-c:v", "libx264",
-		"-preset", "fast",
-		"-b:v", fmt.Sprintf("%dk", targetBitrate),
-		"-maxrate", fmt.Sprintf("%dk", targetBitrate),
-		"-bufsize", fmt.Sprintf("%dk", targetBitrate*2),
-		"-c:a", "aac",
-		"-b:a", "128k",
-		"-movflags", "+faststart",
-		"-y",
-		outputPath,
-	)
-
-	if err := cmd.Run(); err != nil {
-		os.Remove(outputPath)
-		return "", fmt.Errorf("ffmpeg compression failed: %w", err)
-	}
-
-	// Проверяем размер результата
-	compressedInfo, err := os.Stat(outputPath)
-	if err != nil {
-		os.Remove(outputPath)
-		return "", err
-	}
-
-	// Если всё ещё больше целевого размера, пробуем более агрессивное сжатие
-	if compressedInfo.Size() > targetSize {
-		newBitrate := int(float64(targetBitrate) * 0.7)
-		if newBitrate < 150 {
-			newBitrate = 150
-		}
-
-		cmd = exec.Command("ffmpeg",
-			"-i", inputPath,
-			"-c:v", "libx264",
-			"-preset", "faster",
-			"-b:v", fmt.Sprintf("%dk", newBitrate),
-			"-maxrate", fmt.Sprintf("%dk", newBitrate),
-			"-bufsize", fmt.Sprintf("%dk", newBitrate*2),
-			"-c:a", "aac",
-			"-b:a", "96k",
-			"-movflags", "+faststart",
-			"-y",
-			outputPath,
-		)
-
-		if err := cmd.Run(); err != nil {
-			os.Remove(outputPath)
-			return "", fmt.Errorf("ffmpeg second pass failed: %w", err)
-		}
-	}
-
-	return outputPath, nil
-}
-
 func parseQualityNum(quality string) int {
 	var num int
 	fmt.Sscanf(quality, "%dp", &num)
